@@ -10,8 +10,7 @@ import type {
   WorkerTraceCompleteMessage,
 } from '@/types/worker'import type { WorkerPriority } from '@/lib/workers/pool'
 import type { WorkerProgressMessage } from '@/lib/workers/cipher-worker-protocol'
-import { CipherError } from '@/lib/utils/errors'
-import { decodeCipherSteps } from '@/lib/workers/stepTransfer'
+import { CipherError, type CipherErrorCode } from '@/lib/utils/errors'import { decodeCipherSteps } from '@/lib/workers/stepTransfer'
 
 const MAX_CACHE_SIZE = 200
 const WORKER_TIMEOUT_MS = 10000
@@ -136,12 +135,20 @@ export function useCipherWorker() {
           reject(error)
         }
       } else {
-        const errorMsg = payload?.error ?? 'Operation failed in worker'
-        const code = payload?.errorCode
-        const cipherErr = code && code !== 'INVALID_WORKER_MESSAGE'
-          ? new CipherError(code, errorMsg)
-          : new Error(errorMsg)
-        setError(errorMsg)
+const errorMsg =
+  payload?.error ??
+  payload?.errorMessage ??
+  'Operation failed in worker'
+
+const code = payload?.errorCode
+
+const cipherErr =
+  code && code !== 'INVALID_WORKER_MESSAGE'
+    ? new CipherError(code as CipherErrorCode, errorMsg, {
+        details: payload?.errorDetails,
+        remediation: payload?.remediation,
+      })
+    : new Error(errorMsg)        setError(errorMsg)
         reject(cipherErr)
       }
     }

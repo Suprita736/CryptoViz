@@ -78,8 +78,9 @@ export interface WorkerResponsePayload {
   error?: string
   errorCode?: import('@/lib/utils/errors').CipherErrorCode | 'INVALID_WORKER_MESSAGE'
   errorMessage?: string
+  errorDetails?: unknown
+  remediation?: string
 }
-
 export interface WorkerErrorMessage {
   type: 'ERROR'
   jobId?: string
@@ -99,7 +100,8 @@ export interface WorkerResponseSuccess {
     error?: never
     errorCode?: never
     errorMessage?: never
-  }
+    errorDetails?: never
+    remediation?: never  }
   timings?: WorkerResponseTimings
 }
 
@@ -112,7 +114,8 @@ export interface WorkerResponseFailure {
     error?: string
     errorCode?: import('@/lib/utils/errors').CipherErrorCode | 'INVALID_WORKER_MESSAGE'
     errorMessage?: string
-  }
+    errorDetails?: unknown
+    remediation?: string  }
   timings?: WorkerResponseTimings
 }
 

@@ -15,7 +15,8 @@ import {
 import { CipherError, validateInput } from "../utils/errors";
 import type { WorkerRequest, WorkerResponse } from "../../types/worker";
 import type { CipherResult } from "../cipher/types";
-import {
+import { CIPHER_REGISTRY } from "../cipher/registry";
+import { assertValidCipherParameters } from "../cipher/parameterValidation";import {
   encodeCipherSteps,
   WORKER_STEP_TRANSFER_THRESHOLD,
 } from "./stepTransfer";
@@ -572,9 +573,16 @@ function decodeWorkerRequest(data: WorkerRequestMessage): WorkerRequest {
 function toErrorDetails(error: unknown): {
   code?: import("../utils/errors").CipherErrorCode | "INVALID_WORKER_MESSAGE";
   message: string;
+  details?: unknown;
+  remediation?: string;
 } {
   if (error instanceof CipherError) {
-    return { code: error.code as any, message: error.message };
+    return {
+      code: error.code,
+      message: error.message,
+      details: error.details,
+      remediation: error.remediation,
+    };
   }
 
   if (error instanceof Error) {
@@ -583,7 +591,6 @@ function toErrorDetails(error: unknown): {
 
   return { message: String(error) };
 }
-
 workerScope.addEventListener(
   "message",
   async (event: MessageEvent<WorkerRequestMessage>) => {
@@ -617,8 +624,18 @@ if (request.jobId && isJobCancelled(request.jobId)) {
       }
 
       const { type, payload } = request;
-      const { cipherId, input, key, options } = payload;
+const { cipherId, input, key, options } = payload;
 
+const cipherDefinition = CIPHER_REGISTRY.find(
+  (definition) => definition.id === cipherId,
+);
+
+if (!cipherDefinition) {
+  throw new CipherError(
+    "ALGORITHM_UNSUPPORTED",
+    `Unsupported cipher ID: ${cipherId}`,
+  );
+}
       // The worker is a trust boundary too. Never rely solely on the UI hook
       // to enforce resource limits because callers can post directly to it.
       const limits = resolveWorkloadLimits("cipher", cipherId);
@@ -646,13 +663,26 @@ if (request.jobId && isJobCancelled(request.jobId)) {
         throw new CipherError("INVALID_KEY", "Key must be a string.");
       }
 
-      if (options !== undefined &&
-          (typeof options !== "object" || options === null || Array.isArray(options))) {
-        throw new CipherError("INVALID_INPUT", "Cipher options must be an object.");
+      if (
+        options !== undefined &&
+        (typeof options !== "object" ||
+          options === null ||
+          Array.isArray(options))
+      ) {
+        throw new CipherError(
+          "INVALID_INPUT",
+          "Cipher options must be an object.",
+        );
       }
 
-      activeJobs += 1;
-      jobStarted = true;
+      assertValidCipherParameters(
+        cipherDefinition,
+        input,
+        key,
+        options ?? {},
+      );
+
+      activeJobs += 1;      jobStarted = true;
 
       const dispatcher = await getDispatcher(cipherId);
       const handler = payload.type === "encrypt" ? dispatcher.encrypt : dispatcher.decrypt;
@@ -750,17 +780,18 @@ const response: WorkerResponse = {
 
 workerScope.postMessage(response);    } catch (error: unknown) {
       const durationMs = performance.now() - startTime;
-      const { code, message } = toErrorDetails(error);
-
+const { code, message, details, remediation } =
+  toErrorDetails(error);
       const response: WorkerResponse = {
         requestId,
         success: false,
-        payload: {
-          error: message,
-          errorCode: code,
-          errorMessage: message,
-        },
-        timings: { durationMs },
+payload: {
+  error: message,
+  errorCode: code,
+  errorMessage: message,
+  errorDetails: details,
+  remediation,
+},        timings: { durationMs },
       };
 
       workerScope.postMessage(response);
