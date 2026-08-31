@@ -2,8 +2,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CipherResult } from '@/lib/cipher/types'
-import type { WorkerRequest, WorkerResponse } from '@/types/worker'
-import type { WorkerPriority } from '@/lib/workers/pool'
+import type {
+  WorkerRequest,
+  WorkerResponse,
+  WorkerTraceBatchMessage,
+  WorkerTraceStartMessage,
+  WorkerTraceCompleteMessage,
+} from '@/types/worker'import type { WorkerPriority } from '@/lib/workers/pool'
 import type { WorkerProgressMessage } from '@/lib/workers/cipher-worker-protocol'
 import { CipherError } from '@/lib/utils/errors'
 import { decodeCipherSteps } from '@/lib/workers/stepTransfer'
@@ -34,8 +39,9 @@ interface RequestHandlers {
   timeoutId: ReturnType<typeof setTimeout>
   cacheKey: string | null
   onProgress?: (percent: number, message: string) => void
+  traceSteps: import('@/lib/cipher/types').CipherStep[]
+  traceTotal: number
 }
-
 function sortObjectKeys(obj: unknown): unknown {
   if (obj === null || typeof obj !== 'object') return obj
   if (Array.isArray(obj)) return obj.map(sortObjectKeys)
@@ -254,16 +260,17 @@ export function useCipherWorker() {
           reject(new Error('WORKER_TIMEOUT'))
         }, WORKER_TIMEOUT_MS)
 
-        activeRequestsRef.current.set(id, {
-          resolve,
-          reject,
-          signal,
-          onAbort,
-          timeoutId,
-          cacheKey,
-          onProgress: options?.onProgress,
-        })
-        setLoading(true)
+activeRequestsRef.current.set(id, {
+  resolve,
+  reject,
+  signal,
+  onAbort,
+  timeoutId,
+  cacheKey,
+  onProgress: options?.onProgress,
+  traceSteps: [],
+  traceTotal: 0,
+})        setLoading(true)
         setError(null)
         setProgress({ percent: 0, currentMilestone: 'Queued', jobId: id })
 

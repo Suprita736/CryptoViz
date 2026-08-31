@@ -526,6 +526,19 @@ const workerScope = self as unknown as Worker & typeof globalThis;
 
 let activeJobs = 0;
 
+const cancelledJobs = new Set<string>();
+
+function isJobCancelled(jobId: string): boolean {
+  return cancelledJobs.has(jobId);
+}
+
+function markJobCancelled(jobId: string): void {
+  cancelledJobs.add(jobId);
+}
+
+function clearJobCancellation(jobId: string): void {
+  cancelledJobs.delete(jobId);
+}
 function isWorkerRequest(value: unknown): value is WorkerRequest {
   if (!value || typeof value !== "object") return false;
 
@@ -578,10 +591,24 @@ workerScope.addEventListener(
     let requestId = "unknown";
     let jobStarted = false;
 
-    try {
-      const request = decodeWorkerRequest(event.data);
-      requestId = request.requestId;
+    if (
+      !(event.data instanceof Uint8Array) &&
+      event.data?.type === "CANCEL" &&
+      typeof event.data.jobId === "string"
+    ) {
+      markJobCancelled(event.data.jobId);
+      return;
+    }
 
+    try {      const request = decodeWorkerRequest(event.data);
+requestId = request.requestId;
+
+if (request.jobId && isJobCancelled(request.jobId)) {
+  throw new DOMException(
+    "The user aborted the request.",
+    "AbortError",
+  );
+}
       if (!isWorkerRequest(request)) {
         throw new CipherError(
           "INVALID_INPUT",
@@ -629,10 +656,16 @@ workerScope.addEventListener(
 
       const dispatcher = await getDispatcher(cipherId);
       const handler = payload.type === "encrypt" ? dispatcher.encrypt : dispatcher.decrypt;
-      const result = (await handler(input, key, options)) as CipherResult;
+const result = (await handler(input, key, options)) as CipherResult;
 
-      if (!result || typeof result !== "object") {
-        throw new CipherError(
+if (request.jobId && isJobCancelled(request.jobId)) {
+  throw new DOMException(
+    "The user aborted the request.",
+    "AbortError",
+  );
+}
+
+if (!result || typeof result !== "object") {        throw new CipherError(
           "INVALID_INPUT",
           "Cipher implementation returned an invalid result.",
         );
@@ -653,31 +686,69 @@ workerScope.addEventListener(
         );
       }
 
-      if (result.steps.length >= WORKER_STEP_TRANSFER_THRESHOLD) {
-        const stepsBuffer = encodeCipherSteps(result.steps);
-        const transferable = stepsBuffer.buffer as ArrayBuffer;
-        const response: WorkerResponse = {
-          requestId,
-          success: true,
-          payload: {
-            result: { ...result, steps: [] },
-            stepsBuffer: transferable,
-          },
-          timings: { durationMs },
-        };
+const batchSize =
+  typeof options?.traceBatchSize === "number"
+    ? Math.max(1, Math.floor(options.traceBatchSize))
+    : 32;
 
-        workerScope.postMessage(response, [transferable]);
-      } else {
-        const response: WorkerResponse = {
-          requestId,
-          success: true,
-          payload: { result },
-          timings: { durationMs },
-        };
+const traceSteps = result.steps ?? [];
 
-        workerScope.postMessage(response);
-      }
-    } catch (error: unknown) {
+workerScope.postMessage({
+  type: "TRACE_START",
+  requestId,
+  jobId: request.jobId,
+  totalSteps: traceSteps.length,
+});
+
+for (let offset = 0; offset < traceSteps.length; offset += batchSize) {
+  if (request.jobId && isJobCancelled(request.jobId)) {
+    throw new DOMException(
+      "The user aborted the request.",
+      "AbortError",
+    );
+  }
+
+  const batch = traceSteps.slice(offset, offset + batchSize);
+  const stepsBuffer = encodeCipherSteps(batch);
+  const transferable = stepsBuffer.buffer as ArrayBuffer;
+
+  workerScope.postMessage(
+    {
+      type: "TRACE_BATCH",
+      requestId,
+      jobId: request.jobId,
+      offset,
+      stepsBuffer: transferable,
+    },
+    [transferable],
+  );
+
+  await new Promise<void>((resolve) => {
+    const acknowledge = () => {
+      workerScope.removeEventListener("message", acknowledge);
+      resolve();
+    };
+
+    workerScope.addEventListener("message", acknowledge);
+  });
+}
+
+workerScope.postMessage({
+  type: "TRACE_COMPLETE",
+  requestId,
+  jobId: request.jobId,
+});
+
+const response: WorkerResponse = {
+  requestId,
+  success: true,
+  payload: {
+    result: { ...result, steps: [] },
+  },
+  timings: { durationMs },
+};
+
+workerScope.postMessage(response);    } catch (error: unknown) {
       const durationMs = performance.now() - startTime;
       const { code, message } = toErrorDetails(error);
 
