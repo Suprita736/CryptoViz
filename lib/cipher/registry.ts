@@ -6,6 +6,12 @@
  * @returns The operation result produced by the cipher engine.
  * @see https://csrc.nist.gov/pubs/fips/197/final — FIPS 197.
  */
+import { KalynaEngine } from './kalyna/kalynaEngine';
+import { BaseCipher } from './baseCipher';
+import {
+  buildCipherParameterSchema,
+  type CipherParameterSchema,
+} from './parameterValidation';
 export type CipherOptionValue = string | number | boolean
 // Add to cipher registry definitions:
 // csidhDefinition,
@@ -2276,4 +2282,17 @@ export const CIPHER_REGISTRY: CipherDefinition[] = [
     securityStatus: 'recommended',
     options: [{ name: 'Disclosed Indices', id: 'disclosedIndices', type: 'text', default: '[0]' }]
   },
+  export function getCipherParameterSchema(
+  cipherId: string,
+): CipherParameterSchema | undefined {
+  const definition = CIPHER_REGISTRY.find(
+    (cipher) => cipher.id === cipherId,
+  );
+
+  if (!definition) {
+    return undefined;
+  }
+
+  return buildCipherParameterSchema(definition);
+}
 ];

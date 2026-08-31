@@ -2,11 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { CipherResult } from '@/lib/cipher/types'
-import type { WorkerRequest, WorkerResponse } from '@/types/worker'
-import type { WorkerPriority } from '@/lib/workers/pool'
+import type {
+  WorkerRequest,
+  WorkerResponse,
+  WorkerTraceBatchMessage,
+  WorkerTraceStartMessage,
+  WorkerTraceCompleteMessage,
+} from '@/types/worker'import type { WorkerPriority } from '@/lib/workers/pool'
 import type { WorkerProgressMessage } from '@/lib/workers/cipher-worker-protocol'
-import { CipherError } from '@/lib/utils/errors'
-import { decodeCipherSteps } from '@/lib/workers/stepTransfer'
+import { CipherError, type CipherErrorCode } from '@/lib/utils/errors'import { decodeCipherSteps } from '@/lib/workers/stepTransfer'
 
 const MAX_CACHE_SIZE = 200
 const WORKER_TIMEOUT_MS = 10000
@@ -34,8 +38,9 @@ interface RequestHandlers {
   timeoutId: ReturnType<typeof setTimeout>
   cacheKey: string | null
   onProgress?: (percent: number, message: string) => void
+  traceSteps: import('@/lib/cipher/types').CipherStep[]
+  traceTotal: number
 }
-
 function sortObjectKeys(obj: unknown): unknown {
   if (obj === null || typeof obj !== 'object') return obj
   if (Array.isArray(obj)) return obj.map(sortObjectKeys)
@@ -130,12 +135,20 @@ export function useCipherWorker() {
           reject(error)
         }
       } else {
-        const errorMsg = payload?.error ?? 'Operation failed in worker'
-        const code = payload?.errorCode
-        const cipherErr = code && code !== 'INVALID_WORKER_MESSAGE'
-          ? new CipherError(code, errorMsg)
-          : new Error(errorMsg)
-        setError(errorMsg)
+const errorMsg =
+  payload?.error ??
+  payload?.errorMessage ??
+  'Operation failed in worker'
+
+const code = payload?.errorCode
+
+const cipherErr =
+  code && code !== 'INVALID_WORKER_MESSAGE'
+    ? new CipherError(code as CipherErrorCode, errorMsg, {
+        details: payload?.errorDetails,
+        remediation: payload?.remediation,
+      })
+    : new Error(errorMsg)        setError(errorMsg)
         reject(cipherErr)
       }
     }
@@ -254,16 +267,17 @@ export function useCipherWorker() {
           reject(new Error('WORKER_TIMEOUT'))
         }, WORKER_TIMEOUT_MS)
 
-        activeRequestsRef.current.set(id, {
-          resolve,
-          reject,
-          signal,
-          onAbort,
-          timeoutId,
-          cacheKey,
-          onProgress: options?.onProgress,
-        })
-        setLoading(true)
+activeRequestsRef.current.set(id, {
+  resolve,
+  reject,
+  signal,
+  onAbort,
+  timeoutId,
+  cacheKey,
+  onProgress: options?.onProgress,
+  traceSteps: [],
+  traceTotal: 0,
+})        setLoading(true)
         setError(null)
         setProgress({ percent: 0, currentMilestone: 'Queued', jobId: id })
 
